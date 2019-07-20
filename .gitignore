@@ -1,2 +1,4 @@
 data/
-model/
+model*
+ref/
+out/

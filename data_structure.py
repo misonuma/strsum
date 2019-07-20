@@ -1,62 +1,11 @@
-import gensim
-import numpy as np
-import re
-import random
+#coding:utf-8
+import os
+import sys
 import math
-import unicodedata
+import random
 import itertools
-from utils import grouper
-import pdb 
-
-def strip_accents(s):
-     return ''.join(c for c in unicodedata.normalize('NFD', unicode(s,'utf-8'))
-                  if unicodedata.category(c) != 'Mn')
-
-class RawData:
-    def __init__(self):
-        self.userStr = ''
-        self.productStr = ''
-        self.reviewText = ''
-        self.goldRating = -1
-        self.predictedRating = -1
-        self.userStr = ''
-
-class DataSet:
-    def __init__(self, data):
-        self.data = data
-        self.num_examples = len(self.data)
-        self.idx_ind = self.get_idx_ind()
-        self.embeddings_root = None
-        
-    def get_idx_ind(self):
-        idx_ind = {}
-        for ind, instance in enumerate(self.data):
-            idx_ind[instance.idx] = ind
-        return idx_ind
-
-    def sort(self):
-        random.shuffle(self.data)
-        self.data = sorted(self.data, key=lambda x: x._max_sent_len)
-        self.data = sorted(self.data, key=lambda x: x._doc_len)
-
-    def get_by_idxs(self, idxs):
-        return [self.data[idx] for idx in idxs]
-
-    def get_batches(self, batch_size, num_epochs=None, rand = True):
-        num_batches_per_epoch = int(math.ceil(self.num_examples / batch_size))
-        idxs = list(range(self.num_examples))
-        _grouped = lambda: list(grouper(idxs, batch_size))
-
-        if(rand):
-            grouped = lambda: random.sample(_grouped(), num_batches_per_epoch)
-        else:
-            grouped = _grouped
-        num_steps = num_epochs*num_batches_per_epoch
-        batch_idx_tuples = itertools.chain.from_iterable(grouped() for _ in range(num_epochs))
-        for i in range(num_steps):
-            batch_idxs = tuple(i for i in next(batch_idx_tuples) if i is not None)
-            batch_data = self.get_by_idxs(batch_idxs)
-            yield i, batch_data
+from six.moves import zip_longest
+import cPickle
 
 class Instance:
     def __init__(self):
@@ -72,47 +21,71 @@ class Instance:
         k = max([len(sent) for sent in self.token_idxs])
         return k
 
-class Corpus:
-    def __init__(self):
-        self.doclst = {}
+class DataSet:
+    def __init__(self, data, train):
+        self.data_dict = sort_data(data, train)
+        self.num_examples = sum([len(data) for data in self.data_dict.values()])
+        
+    def sort(self):
+        random.shuffle(self.data)
+        self.data = sorted(self.data, key=lambda x: x._max_sent_len)
+        self.data = sorted(self.data, key=lambda x: x._doc_len)
 
-    def load(self, in_path, name):
-        self.doclst[name] = []
-        for line in open(in_path):
-            items = line.split('<split1>')
-            doc = RawData()
-            doc.goldRating = int(items[0])
-            doc.reviewText = items[1]
-            self.doclst[name].append(doc)
-            
-    def preprocess(self):
-        random.shuffle(self.doclst['train'])
-        for dataset in self.doclst:
-            for doc in self.doclst[dataset]:
-                doc.sent_lst = doc.reviewText.split('<split2>')
-                doc.sent_lst = [re.sub(r"[^A-Za-z0-9(),!?\'\`_]", " ",sent) for sent in doc.sent_lst]
-                doc.sent_token_lst = [sent.split() for sent in doc.sent_lst]
-                doc.sent_token_lst = [sent_tokens for sent_tokens in doc.sent_token_lst if(len(sent_tokens)!=0)]
-            self.doclst[dataset] = [doc for doc in self.doclst[dataset] if len(doc.sent_token_lst)!=0]
+    def get_by_idxs(self, idxs):
+        return [self.data[idx] for idx in idxs]
 
-    def w2v(self, options):
-        sentences = []
-        for doc in self.doclst['train']:
-            sentences.extend(doc.sent_token_lst)
-        if('dev' in self.doclst):
-            for doc in self.doclst['dev']:
-                sentences.extend(doc.sent_token_lst)
-        print(sentences[0])
-        if(options['skip_gram']):
-            self.w2v_model = gensim.models.word2vec.Word2Vec(size=options['emb_size'], window=5, min_count=5, workers=4, sg=1)
+    def get_batches(self, batch_size, num_epochs=None, rand = True):
+        _batches = []
+        for doc_l, data in self.data_dict.items():
+            batches_doc_l = list(grouper(data, batch_size))
+            _batches += batches_doc_l
+
+        _batches = [tuple([instance for instance in batch if instance is not None]) for batch in _batches]            
+        num_batches = len(_batches)
+        if(rand):
+            batches = random.sample(_batches, num_batches)
         else:
-            self.w2v_model = gensim.models.word2vec.Word2Vec(size=options['emb_size'], window=5, min_count=5, workers=4)
-        self.w2v_model.scan_vocab(sentences)  # initial survey
-        rtn = self.w2v_model.scale_vocab(dry_run = True)  # trim by min_count & precalculate downsampling
-        print(rtn)
-        self.w2v_model.finalize_vocab()  # build tables & arrays
-        self.w2v_model.train(sentences, total_examples=self.w2v_model.corpus_count, epochs=self.w2v_model.iter)
-        self.vocab = self.w2v_model.wv.vocab
-        print('Vocab size: {}'.format(len(self.vocab)))
+            batches = _batches
 
-        # model.save('../data/w2v.data')
+        batches_epochs = itertools.chain.from_iterable(batches for _ in range(num_epochs))
+        num_steps = num_epochs*num_batches
+        for i in range(num_steps):
+            batch = batches_epochs.next()
+            yield i, batch
+
+def grouper(iterable, n, fillvalue=None, shorten=False, num_groups=None):
+    args = [iter(iterable)] * n
+    out = zip_longest(*args, fillvalue=fillvalue)
+    out = list(out)
+    if num_groups is not None:
+        default = (fillvalue,) * n
+        assert isinstance(num_groups, int)
+        out = list(each for each, _ in zip_longest(out, range(num_groups), fillvalue=default))
+    if shorten:
+        assert fillvalue is None
+        out = (tuple(e for e in each if e is not None) for each in out)
+    return out
+
+def sort_data(data, train):
+    docl_dict = {}
+    for d in data:
+        doc_l = d.doc_l
+        docl_dict.setdefault(doc_l, [])
+        docl_dict[doc_l] += [d]
+
+    if train:
+        doc_l_dict = {doc_l: random.shuffle(data) for doc_l, data in docl_dict.items()}
+    return docl_dict
+
+def load_data(config):
+    datapath = os.path.join(config.datadir, config.dataname)
+    train, dev, test, embeddings, word_to_id = cPickle.load(open(datapath))
+    trainset, devset, testset = DataSet(train, train=True), DataSet(dev, train=False), DataSet(test, train=False)
+    num_examples = trainset.num_examples
+    vocab = dict([(v, k) for k,v in word_to_id.items()])
+    train_batches = trainset.get_batches(config.batch_size, config.epochs, rand=True)
+    dev_batches = devset.get_batches(config.batch_size, 1, rand=False)
+    test_batches = testset.get_batches(config.batch_size, 1, rand=False)
+    dev_batches = [i for i in dev_batches]
+    test_batches = [i for i in test_batches]
+    return num_examples, train_batches, dev_batches, test_batches, embeddings, vocab, word_to_id
