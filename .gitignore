@@ -6,3 +6,5 @@ out/
 __pychache__/
 *.pyc
 *.ipynb
+
+TMP/*
