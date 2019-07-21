@@ -2,3 +2,6 @@ data/
 model*
 ref/
 out/
+.ipynb_checkpoints/
+__pychache__/
+*.pyc
