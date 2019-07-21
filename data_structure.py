@@ -5,7 +5,8 @@ import math
 import random
 import itertools
 from six.moves import zip_longest
-import cPickle
+#import cPickle
+import _pickle as cPickle
 
 class Instance:
     def __init__(self):
@@ -49,8 +50,9 @@ class DataSet:
 
         batches_epochs = itertools.chain.from_iterable(batches for _ in range(num_epochs))
         num_steps = num_epochs*num_batches
+        
         for i in range(num_steps):
-            batch = batches_epochs.next()
+            batch = next(batches_epochs)
             yield i, batch
 
 def grouper(iterable, n, fillvalue=None, shorten=False, num_groups=None):
@@ -79,7 +81,7 @@ def sort_data(data, train):
 
 def load_data(config):
     datapath = os.path.join(config.datadir, config.dataname)
-    train, dev, test, embeddings, word_to_id = cPickle.load(open(datapath))
+    train, dev, test, embeddings, word_to_id = cPickle.load(open(datapath, 'rb'), encoding='latin1')
     trainset, devset, testset = DataSet(train, train=True), DataSet(dev, train=False), DataSet(test, train=False)
     print('Number of train examples: %i' % trainset.num_examples)
     vocab = dict([(v, k) for k,v in word_to_id.items()])

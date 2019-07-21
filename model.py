@@ -2,7 +2,8 @@
 
 import tensorflow as tf
 import numpy as np
-import pdb
+
+from components import dynamic_bi_rnn, get_matrix_tree, discourse_rank
 
 class StrSumModel():
     def __init__(self, config):
@@ -59,29 +60,12 @@ class StrSumModel():
         tokens_input_ = tf.nn.embedding_lookup(self.embeddings, token_idxs)
         tokens_input = tf.nn.dropout(tokens_input_, self.t_variables['keep_prob'])
         tokens_input_do = tf.reshape(tokens_input, [batch_l * max_doc_l, max_sent_l, self.config.d_embed])
-        
-        def dynamicBiRNN(inputs, seqlen, n_hidden, cell_name='', reuse=False):
-            batch_size = tf.shape(inputs)[0]
-            with tf.variable_scope(cell_name + 'fw', initializer=tf.contrib.layers.xavier_initializer(), dtype = tf.float32, reuse=reuse):
-                fw_cell = tf.contrib.rnn.GRUCell(n_hidden)
-                fw_cell = tf.contrib.rnn.DropoutWrapper(fw_cell, output_keep_prob = self.t_variables['keep_prob'])
-                fw_initial_state = fw_cell.zero_state(batch_size, tf.float32)
-            with tf.variable_scope(cell_name + 'bw', initializer=tf.contrib.layers.xavier_initializer(), dtype = tf.float32, reuse=reuse):
-                bw_cell = tf.contrib.rnn.GRUCell(n_hidden)
-                bw_cell = tf.contrib.rnn.DropoutWrapper(bw_cell, output_keep_prob = self.t_variables['keep_prob'])
-                bw_initial_state = bw_cell.zero_state(batch_size, tf.float32)
-            with tf.variable_scope(cell_name, reuse=reuse):
-                outputs, output_states = tf.nn.bidirectional_dynamic_rnn(fw_cell, bw_cell, inputs,
-                                                                         initial_state_fw=fw_initial_state,
-                                                                         initial_state_bw=bw_initial_state,
-                                                                         sequence_length=seqlen)
-            return outputs, output_states    
-        
+                
         # get sentence embedding
         sent_l = self.t_variables['sent_l']
         sent_l_do = tf.reshape(sent_l, [batch_l * max_doc_l])
         
-        tokens_outputs, _ = dynamicBiRNN(tokens_input_do, sent_l_do, n_hidden=dim_hidden, cell_name='Model/sent')
+        tokens_outputs, _ = dynamic_bi_rnn(tokens_input_do, sent_l_do, dim_hidden, self.t_variables['keep_prob'], cell_name='Model/sent')
         tokens_output_do_ = tf.concat(tokens_outputs, 2)
         mask_tokens_do = tf.sequence_mask(sent_l_do, maxlen=max_sent_l, dtype=tf.float32)
         tokens_output_do = tokens_output_do_ + tf.expand_dims((mask_tokens_do-1)*999,2)
@@ -108,69 +92,17 @@ class StrSumModel():
         raw_scores_words_ = tf.exp(raw_scores_words_tmp)
         diag_zero = tf.zeros_like(raw_scores_words_[:,:,0])
         raw_scores_words = tf.matrix_set_diag(raw_scores_words_, diag_zero)
-        self.raw_scores_words = raw_scores_words
 
         raw_scores_root_ = tf.squeeze(tf.tensordot(sents_input_str, w_parser_root, [[2], [0]]) , [2])
         raw_scores_root = tf.exp(tf.tanh(raw_scores_root_))
-        self.raw_scores_root = raw_scores_root
-
-        def _getMatrixTree(r, A):
-            L = tf.reduce_sum(A, 1)
-            L = tf.matrix_diag(L)
-            L = L - A
-
-            r_diag = tf.matrix_diag(r)
-            LL = L + r_diag
-
-            LL_inv = tf.matrix_inverse(LL)  #batch_l, doc_l, doc_l
-            LL_inv_diag_ = tf.matrix_diag_part(LL_inv)
-
-            d0 = tf.multiply(r, LL_inv_diag_)
-
-            LL_inv_diag = tf.expand_dims(LL_inv_diag_, 2)
-
-            tmp1 = tf.multiply(A, tf.matrix_transpose(LL_inv_diag))
-            tmp2 = tf.multiply(A, tf.matrix_transpose(LL_inv))
-
-            d = tmp1 - tmp2
-            d = tf.concat([tf.expand_dims(d0,[1]), d], 1)
-            return d, LL
         
-        str_scores_, LL = _getMatrixTree(raw_scores_root, raw_scores_words)
+        str_scores_ = get_matrix_tree(raw_scores_root, raw_scores_words)
         str_scores = tf.multiply(str_scores_, tf.expand_dims(mask_sents, 1))
         self.str_scores = str_scores
         
-        # update str_scores by discourserank
-        def get_eig_str_scores(str_scores):
-            str_scores_root = str_scores[:, 0, :]
-            str_scores_words = str_scores[:, 1:, :]
-
-            str_root = tf.expand_dims(tf.one_hot(indices=0, depth=(max_doc_l+1), 
-                        on_value=0.0, off_value=1.0/tf.cast(max_doc_l, tf.float32), dtype=tf.float32), 0)
-            str_roots = tf.expand_dims(tf.tile(str_root, [batch_l, 1]), -1)
-
-            adj_scores = tf.concat([str_roots, str_scores], 2)
-
-            eye = tf.expand_dims(tf.diag(tf.ones(max_doc_l+1)), 0)
-            eye_words = tf.tile(eye, [batch_l, 1, 1])
-
-            eig_matrix_inv = tf.matrix_inverse(eye_words - self.config.damp*adj_scores)
-            damp_vec = tf.ones([batch_l, (max_doc_l+1), 1]) / tf.cast((max_doc_l+1), tf.float32)
-
-            eig_scores_ = tf.multiply((1-self.config.damp), tf.matmul(eig_matrix_inv, damp_vec))
-            eig_scores_ = tf.squeeze(eig_scores_, 2)[:, 1:]
-            eig_scores = tf.nn.softmax(eig_scores_, 1)
-
-            eig_str_scores_root = tf.expand_dims(tf.multiply(eig_scores, str_scores_root), 1)
-            eig_str_scores = tf.concat([eig_str_scores_root, str_scores_words], 1)
-            
-            return eig_str_scores, eig_scores_
-
+        # update str_scores with discourse_rank
         if self.config.discourserank:
-            eig_str_scores, eig_scores_ = get_eig_str_scores(str_scores)
-            self.eig_str_scores = eig_str_scores
-            self.eig_scores = eig_scores_
-            str_scores = eig_str_scores
+            str_scores = discourse_rank(str_scores, self.config.damp)
         
         str_scores_sum = tf.expand_dims(tf.reduce_sum(str_scores, 2), 2)
         str_scores_norm = str_scores/str_scores_sum
