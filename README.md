@@ -4,12 +4,13 @@ Corresponding paper:
 
 https://arxiv.org/abs/1906.05691  
 Masaru Isonuma, Juncihiro Mori and Ichiro Sakata (The University of Tokyo)  
-Accepted in ACL 2019 as a long paper  
+Accepted in ACL 2019 as a long paper
 
 
 ### Requirements
 
-Tensorflow
+Python 3.6
+Tensorflow 1.8.0
 
 ### Usage
 
@@ -24,8 +25,8 @@ python create_dataframe.py --input_path /path/to/gzip/file --output_path /path/t
 python preprocess_data.py --input_path /path/to/dataframe --output_path /path/to/data
 ```
 
-Other dataset can be downloaded http://jmcauley.ucsd.edu/data/amazon/  
-Set `/path/to/gzip/file` as the path of raw gzip file
+Other dataset can be downloaded at http://jmcauley.ucsd.edu/data/amazon/  
+Put raw gzip file at `/path/to/gzip/file`
 
 #### Training
 
