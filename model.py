@@ -20,6 +20,7 @@ class StrSumModel():
         t_variables['doc_l'] = tf.placeholder(tf.int32, [None])
         t_variables['max_sent_l'] = tf.placeholder(tf.int32, [])
         t_variables['max_doc_l'] = tf.placeholder(tf.int32, [])
+        
         self.t_variables = t_variables
         self.config = config
         
@@ -31,47 +32,36 @@ class StrSumModel():
         
         # define variables        
         with tf.variable_scope("self.embeddings", reuse=tf.AUTO_REUSE):
-            self.embeddings = tf.get_variable("emb", [self.config.n_embed, self.config.d_embed], dtype=tf.float32,
-                                         initializer=tf.contrib.layers.xavier_initializer())
+            self.embeddings = tf.get_variable("emb", [self.config.n_embed, self.config.d_embed], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
             
         with tf.variable_scope("Model", reuse=tf.AUTO_REUSE):
-            w_comb = tf.get_variable("w_comb", [dim_sent, dim_sent], dtype=tf.float32,
-                            initializer=tf.contrib.layers.xavier_initializer())
+            w_comb = tf.get_variable("w_comb", [dim_sent, dim_sent], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
             b_comb = tf.get_variable("bias_comb", [dim_sent], dtype=tf.float32, initializer=tf.constant_initializer())
 
         with tf.variable_scope("Structure", reuse=tf.AUTO_REUSE):
-            w_parser_p = tf.get_variable("w_parser_p", [dim_str, dim_str],
-                            dtype=tf.float32,
-                            initializer=tf.contrib.layers.xavier_initializer())
-            b_parser_p = tf.get_variable("bias_parser_p", [dim_str], dtype=tf.float32,
-                            initializer=tf.constant_initializer())
+            w_parser_p = tf.get_variable("w_parser_p", [dim_str, dim_str], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
+            b_parser_p = tf.get_variable("bias_parser_p", [dim_str], dtype=tf.float32, initializer=tf.constant_initializer())
 
-            w_parser_c = tf.get_variable("w_parser_c", [dim_str, dim_str],
-                            dtype=tf.float32,
-                            initializer=tf.contrib.layers.xavier_initializer())
-            b_parser_c = tf.get_variable("bias_parser_c", [dim_str], dtype=tf.float32,
-                            initializer=tf.constant_initializer())
+            w_parser_c = tf.get_variable("w_parser_c", [dim_str, dim_str], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
+            b_parser_c = tf.get_variable("bias_parser_c", [dim_str], dtype=tf.float32, initializer=tf.constant_initializer())
 
-            w_parser_s = tf.get_variable("w_parser_s", [dim_str, dim_str], dtype=tf.float32,
-                            initializer=tf.contrib.layers.xavier_initializer())
+            w_parser_s = tf.get_variable("w_parser_s", [dim_str, dim_str], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
 
-            w_parser_root = tf.get_variable("w_parser_root", [dim_str, 1], dtype=tf.float32,
-                            initializer=tf.contrib.layers.xavier_initializer())
+            w_parser_root = tf.get_variable("w_parser_root", [dim_str, 1], dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer())
 
-        # get word embedding
+        # input
         batch_l = self.t_variables['batch_l']
         max_doc_l = self.t_variables['max_doc_l']
         max_sent_l = self.t_variables['max_sent_l']
-
         token_idxs = self.t_variables['token_idxs'][:, :max_doc_l, :max_sent_l]
 
+        # get word embedding
         tokens_input_ = tf.nn.embedding_lookup(self.embeddings, token_idxs)
         tokens_input = tf.nn.dropout(tokens_input_, self.t_variables['keep_prob'])
-
         tokens_input_do = tf.reshape(tokens_input, [batch_l * max_doc_l, max_sent_l, self.config.d_embed])
         
-        def dynamicBiRNN(input, seqlen, n_hidden, cell_name='', reuse=False):
-            batch_size = tf.shape(input)[0]
+        def dynamicBiRNN(inputs, seqlen, n_hidden, cell_name='', reuse=False):
+            batch_size = tf.shape(inputs)[0]
             with tf.variable_scope(cell_name + 'fw', initializer=tf.contrib.layers.xavier_initializer(), dtype = tf.float32, reuse=reuse):
                 fw_cell = tf.contrib.rnn.GRUCell(n_hidden)
                 fw_cell = tf.contrib.rnn.DropoutWrapper(fw_cell, output_keep_prob = self.t_variables['keep_prob'])
@@ -81,7 +71,7 @@ class StrSumModel():
                 bw_cell = tf.contrib.rnn.DropoutWrapper(bw_cell, output_keep_prob = self.t_variables['keep_prob'])
                 bw_initial_state = bw_cell.zero_state(batch_size, tf.float32)
             with tf.variable_scope(cell_name, reuse=reuse):
-                outputs, output_states = tf.nn.bidirectional_dynamic_rnn(fw_cell, bw_cell, input,
+                outputs, output_states = tf.nn.bidirectional_dynamic_rnn(fw_cell, bw_cell, inputs,
                                                                          initial_state_fw=fw_initial_state,
                                                                          initial_state_bw=bw_initial_state,
                                                                          sequence_length=seqlen)
@@ -91,24 +81,23 @@ class StrSumModel():
         sent_l = self.t_variables['sent_l']
         sent_l_do = tf.reshape(sent_l, [batch_l * max_doc_l])
         
-        tokens_outputs, tokens_output_states = dynamicBiRNN(tokens_input_do, sent_l_do, n_hidden=dim_hidden, cell_name='Model/sent')
-        
-        mask_tokens_do = tf.sequence_mask(sent_l_do, maxlen=max_sent_l, dtype=tf.float32)
-
+        tokens_outputs, _ = dynamicBiRNN(tokens_input_do, sent_l_do, n_hidden=dim_hidden, cell_name='Model/sent')
         tokens_output_do_ = tf.concat(tokens_outputs, 2)
+        mask_tokens_do = tf.sequence_mask(sent_l_do, maxlen=max_sent_l, dtype=tf.float32)
         tokens_output_do = tokens_output_do_ + tf.expand_dims((mask_tokens_do-1)*999,2)
 
         doc_l = self.t_variables['doc_l']
         mask_sents = tf.sequence_mask(doc_l, maxlen=max_doc_l, dtype=tf.float32)
         mask_sents_do = tf.reshape(mask_sents, [batch_l * max_doc_l, 1])
 
-        sents_input_do = tf.reduce_max(tokens_output_do, 1) * mask_sents_do
-        sents_input_ = tf.reshape(sents_input_do, [batch_l, max_doc_l, dim_bi_hidden])
+        sents_input_con_do = tf.reduce_max(tokens_output_do, 1) * mask_sents_do
+        sents_input_con = tf.reshape(sents_input_con_do, [batch_l, max_doc_l, dim_bi_hidden])
         
-        sents_input_str_ = sents_input_[:, :, :dim_str]
-        sents_input_ = sents_input_[:, :, dim_str:]
-    
+        # devide sents_input_con to sents_input_str and sents_input
+        sents_input_str_ = sents_input_con[:, :, :dim_str]
         sents_input_str = tf.nn.dropout(sents_input_str_, self.t_variables['keep_prob'])
+        
+        sents_input_ = sents_input_con[:, :, dim_str:]
         sents_input = tf.nn.dropout(sents_input_, self.t_variables['keep_prob'])
     
         # get document structure
@@ -151,6 +140,7 @@ class StrSumModel():
         str_scores = tf.multiply(str_scores_, tf.expand_dims(mask_sents, 1))
         self.str_scores = str_scores
         
+        # update str_scores by discourserank
         def get_eig_str_scores(str_scores):
             str_scores_root = str_scores[:, 0, :]
             str_scores_words = str_scores[:, 1:, :]
@@ -158,7 +148,7 @@ class StrSumModel():
             str_root = tf.expand_dims(tf.one_hot(indices=0, depth=(max_doc_l+1), 
                         on_value=0.0, off_value=1.0/tf.cast(max_doc_l, tf.float32), dtype=tf.float32), 0)
             str_roots = tf.expand_dims(tf.tile(str_root, [batch_l, 1]), -1)
-#             str_roots = tf.zeros([batch_l, (max_doc_l+1), 1], dtype=tf.float32)
+
             adj_scores = tf.concat([str_roots, str_scores], 2)
 
             eye = tf.expand_dims(tf.diag(tf.ones(max_doc_l+1)), 0)
@@ -186,17 +176,12 @@ class StrSumModel():
         str_scores_norm = str_scores/str_scores_sum
 
         # get structured sentence embedding
-        sents_output_root_raw = tf.matmul(str_scores_norm, sents_input)
-        sents_output_root_ = tf.nn.dropout(tf.tanh(tf.tensordot(sents_output_root_raw, w_comb, [[2], [0]]) + b_comb), self.t_variables['keep_prob'])
-        sents_output_ = sents_output_root_[:, 1:, :]
-
-        mask_sents_root = tf.concat([tf.ones([batch_l, 1]), mask_sents], 1)
-
-        sents_output = tf.multiply(sents_output_,tf.expand_dims(mask_sents, 2))
+        str_output_root = tf.matmul(str_scores_norm, sents_input)
+        sents_output_root = tf.tanh(tf.tensordot(str_output_root, w_comb, [[2], [0]]) + b_comb)
+        
+        sents_output_ = sents_output_root[:, 1:, :]
+        sents_output = tf.nn.dropout(tf.multiply(sents_output_,tf.expand_dims(mask_sents, 2)), self.t_variables['keep_prob'])
         sents_output_do = tf.reshape(sents_output, [batch_l*max_doc_l, dim_sent])
-
-        sents_output_root = tf.multiply(sents_output_root_, tf.expand_dims(mask_sents_root,2))
-        sents_output_root_do = tf.reshape(sents_output_root, [batch_l*(max_doc_l+1), dim_sent])
         
         # prepare for decoding
         dec_input_idxs = self.t_variables['dec_input_idxs']
@@ -226,57 +211,6 @@ class StrSumModel():
 
             logits = output_layer(decoder_outputs.rnn_output)
             self.logits = logits
-            
-        # decode for inference of only summary tokens
-        root_start_tokens = tf.fill([batch_l], self.config.BOS_IDX)
-        end_token = self.config.EOS_IDX
-
-        root_sent_input = sents_output_root_[:, 0, :]
-        self.root_sent_input = root_sent_input
-        beam_root_sent_input = tf.contrib.seq2seq.tile_batch(root_sent_input, multiplier=self.config.beam_width)
-
-        root_beam_decoder = tf.contrib.seq2seq.BeamSearchDecoder(
-            cell=dec_cell,
-            embedding=self.embeddings,
-            start_tokens=root_start_tokens,
-            end_token=end_token,
-            initial_state=beam_root_sent_input,
-            beam_width=self.config.beam_width, 
-            output_layer=output_layer,
-            length_penalty_weight=self.config.length_penalty_weight)
-
-        root_beam_decoder_outputs, _, root_beam_sent_l = tf.contrib.seq2seq.dynamic_decode(
-            root_beam_decoder,
-            maximum_iterations = self.config.maximum_iterations)
-
-        root_output_token_idxs_ = root_beam_decoder_outputs.predicted_ids[:, :, 0]
-        self.summary_output_token_idxs = root_output_token_idxs_
-
-        # decode for inferrence
-        start_tokens = tf.fill([batch_l * (max_doc_l+1)], self.config.BOS_IDX)
-        end_token = self.config.EOS_IDX            
-        with tf.variable_scope('Model/sent/decoder', initializer=tf.contrib.layers.xavier_initializer(), dtype = tf.float32, reuse=tf.AUTO_REUSE):
-            tiled_sents_output_root_do = tf.contrib.seq2seq.tile_batch(
-                    sents_output_root_do, multiplier=self.config.beam_width)
-            
-            tiled_decoder_initial_state = tiled_sents_output_root_do
-            beam_decoder = tf.contrib.seq2seq.BeamSearchDecoder(
-                cell=dec_cell,
-                embedding=self.embeddings,
-                start_tokens=start_tokens,
-                end_token=end_token,
-                initial_state=tiled_decoder_initial_state,
-                beam_width=self.config.beam_width, 
-                output_layer=output_layer,
-                length_penalty_weight=self.config.length_penalty_weight)
-
-            beam_decoder_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
-                            beam_decoder,
-                            maximum_iterations = self.config.maximum_iterations)
-
-            beam_output_token_idxs_do = beam_decoder_outputs.predicted_ids[:, :, 0]
-            beam_output_token_idxs = tf.reshape(beam_output_token_idxs_do, [batch_l, max_doc_l+1, tf.shape(beam_output_token_idxs_do)[1]])
-            self.beam_output_token_idxs = beam_output_token_idxs
 
         # target and mask
         dec_target_idxs = self.t_variables['dec_target_idxs']
@@ -302,6 +236,30 @@ class StrSumModel():
         
         self.loss = loss
         self.opt = opt
+        
+        #  infer root token idxs only
+        root_output = sents_output_root[:, 0, :]
+        beam_root_output = tf.contrib.seq2seq.tile_batch(root_output, multiplier=self.config.beam_width)
+
+        start_tokens = tf.fill([batch_l], self.config.BOS_IDX)
+        end_token = self.config.EOS_IDX
+
+        beam_decoder = tf.contrib.seq2seq.BeamSearchDecoder(
+            cell=dec_cell,
+            embedding=self.embeddings,
+            start_tokens=start_tokens,
+            end_token=end_token,
+            initial_state=beam_root_output,
+            beam_width=self.config.beam_width, 
+            output_layer=output_layer,
+            length_penalty_weight=self.config.length_penalty_weight)
+
+        beam_decoder_outputs, _, root_beam_sent_l = tf.contrib.seq2seq.dynamic_decode(
+            beam_decoder,
+            maximum_iterations = self.config.maximum_iterations)
+
+        root_token_idxs = beam_decoder_outputs.predicted_ids[:, :, 0]
+        self.root_token_idxs = root_token_idxs
     
     def get_feed_dict(self, batch, mode='train'):
         batch_size = len(batch)
