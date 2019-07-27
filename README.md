@@ -16,17 +16,20 @@ Tensorflow 1.8.0
 
 #### Preprocessing
 
-The pre-processed Amazon Sports & Outdoors review data can be used: `data/sports.pkl`  
+The pre-processed Amazon Sports & Outdoors review data can be downloaded at:  
+Put it at `/path/to/data`  
 
 To use other dataset, run: 
 
 ```
 python create_dataframe.py --input_path /path/to/gzip/file --output_path /path/to/dataframe
-python preprocess_data.py --input_path /path/to/dataframe --output_path /path/to/data
+python preprocess_data.py --input_path /path/to/dataframe --output_path /path/to/data --word_vec_path /path/to/vec
 ```
 
 Other dataset can be downloaded at http://jmcauley.ucsd.edu/data/amazon/  
-Put raw gzip file at `/path/to/gzip/file`
+Put raw gzip file at `/path/to/gzip/file`  
+Also, download the pretrained FastText word vector file `crawl-300d-2M.vec` from the url below and put it at /path/to/vec  
+https://fasttext.cc/docs/en/english-vectors.html  
 
 #### Training
 
